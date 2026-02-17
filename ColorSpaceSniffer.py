@@ -190,7 +190,7 @@ def CheckNoiseLevels(frames) :
         std_dev[2] = math.sqrt(std_numerator[2] / (n - 1))
         std_dev[3] = math.sqrt(std_numerator[3] / (n - 1))
 
-        SNR = 20 * math.log10((avg[0] + avg[1] + avg[2] / (math.sqrt(std_dev[0]**2 + std_dev[1]**2 + std_dev[2]**2))))
+        SNR = 20 * math.log10((avg[0] + avg[1] + avg[2] )/ ((math.sqrt(std_dev[0]**2 + std_dev[1]**2 + std_dev[2]**2))))
 
         AggragateSNR += SNR
         Aggragate_Noise[0] += std_dev[0]
@@ -276,6 +276,8 @@ def LaplacianEnergy(luminance) :
     return AvgLaplacian
 
 def LocalContrastRatio(original_frames, transformed_frames) : 
+    # if result is 1.0 then contrast is the same after transform, if it is greater than 1 there is more contrast, less than 1 is less contrast
+    #note also, this is checking high frequency luminance contrast, not perceptual contrast. 
     counter = 0
     ratio = 0
     for frame in original_frames :
@@ -383,6 +385,35 @@ def ScoreIDTtransforms(OriginalFrames, TransformedFrames, config, idt, odt, PSNR
     return Score
 
 
+
+def BetterIDTScoring(OriginalFrames, TransformedFrames, config, idt, odt, Noise = False) :
+
+    #a perfect rounbd trip psnr returns something close to 48.13, so divide result by 48 to normalalize, then * 100 to get an out of 100 score
+    Score = (RoundTripPSNR(OriginalFrames, TransformedFrames, config, idt, odt) /48) * 100
+
+    Score -= 10.0 * CheckNeutralVariance(TransformedFrames)
+
+    Score -= 10.0 * ManyFrameChannelCorrelation(TransformedFrames)
+
+
+    #normalzing the number of clipped pixels to the number of pixels and chennels in the image
+    src_height, src_width = TransformedFrames[0].shape[:2]
+    Score -= 10.0 * sum(CheckGamutClipping(TransformedFrames)) / (src_height * src_width * 3)
+
+    #this is a shift such that higher contrast is rewarded and lower contrast is penalized
+    Score += 10.0 * (LocalContrastRatio(OriginalFrames, TransformedFrames) - 1.0)
+
+    if Noise :
+        AvgSNR, AvgNoise = CheckNoiseLevels(TransformedFrames)
+        #normalizing by about what an ideal SNR would be
+        Score += 10.0 *(AvgSNR / 20)
+
+    Score += 10.0 * (CheckSaturation(TransformedFrames) / (src_height * src_width))
+
+
+    return Score
+
+
 def main():
     ###Setting the OCIO Config 
     config = OCIO.Config.CreateFromFile(r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\studio-config-all-views-v4.0.0_aces-v2.0_ocio-v2.5.ocio")
@@ -455,9 +486,9 @@ def main():
 
 
     ## defining the video to be imported **** TO BE CHANGED SO I CAN RUN THIS OFF COMMAND LINE*****
-    Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\DJI_Test_Footage\ShortClip.mov"
+    #Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\DJI_Test_Footage\ShortClip.mov"
     #Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\ZS_Stills\A002_C005_0113GW.RDC\RWGLog3G10Clip.mov"
-    #Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\DJI_Test_Footage\CowsSmall.mp4"
+    Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\DJI_Test_Footage\CowsSmall.mp4"
     #Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\Dev_ColorSpaceSniffer\001.TokyoNight_Cam1.mov"
     #Src_VideoPath = r"C:\Users\malco\Root\8_Special_Projects\COlorPipelineTest\Slog3_Test_Footage\shortSlog.mov"
    # Src_VideoPath = r"C:\Users\malco\Root\999_misc\test_videos\BabyHands.mp4"
@@ -485,7 +516,7 @@ def main():
         #print('running round number ', counter,'  of this loop')
         PenaltyScore = 0.0
         TransformedFrames = OCIO_CST(SampleFrames, config, idt, P3D65_ODT)
-#        PenaltyScore = ScoreIDTtransforms(SampleFrames, TransformedFrames, config, idt, P3D65_ODT)
+        PenaltyScore = BetterIDTScoring(SampleFrames, TransformedFrames, config, idt, P3D65_ODT)
         ArrayOfScores.append(PenaltyScore)
 
         print("the Penalty score for the transform ", idt, " is  ", PenaltyScore)
@@ -510,32 +541,10 @@ def main():
     print("The Results are in, accordin to my studies, the least bad IDT for you to use is......", IDTs[min_pos])
 
 
-
-    #Avg_SNR , Avg_Noise = CheckNoiseLevels(DJI2ODT_Frames)
-
-
-    #print('The average number of clipped red pixels per frame is: ', AvgClippedPix[2])
-    #print('The average number of clipped green pixels per frame is: ', AvgClippedPix[1])
-    #print('The average number of clipped blue pixels per frame is: ', AvgClippedPix[0])
-    #print('the average Noise in the Red Channel is: ', Avg_Noise[2])
-    #print('the average Noise in the green Channel is: ', Avg_Noise[1])
-    #print('the average Noise in the blue Channel is: ', Avg_Noise[0])
-    #print('the average Noise in the Luma Channel is: ', Avg_Noise[2])
-    #print('the average SNR is: ', Avg_SNR)
-
-
-    #while True:
-    #    k = cv.waitKey()
-    #    if k == 27:
-    #        break
-
     cv.destroyAllWindows
 
     fourcc = cv.VideoWriter_fourcc(*'FFV1')
-    #output = cv.VideoWriter('IntermediateOutput.mov', fourcc, FrameRate, (int(FrameWidth), int(FrameHeight)))
-    #output.release()
 
-    
     cv.destroyAllWindows
 
 
